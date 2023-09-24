@@ -1,0 +1,108 @@
+#!/usr/bin/env python3
+
+import cv2 as cv
+import pytesseract
+import pyperclip
+import argparse
+
+class Extractor:
+
+	def __init__(self):
+
+		# fields are set during running
+		self.minsize = None
+		self.maxsize = None
+		self.image = None
+		self.contours = None
+
+	# simple setter to apply bounds to the allowable contour size
+	def set_bounds(self, minsize, maxsize):
+		self.minsize = minsize
+		self.maxsize = maxsize
+
+	# draws contours
+	def draw_contours(self):
+		# if contours not calculated yet, calculate them
+		if self.contours is None:
+			self.calculate_contours()
+
+		# create a copy for drawing so we dont put stuff on the original image
+		im_rect = self.image.copy()
+
+		for i, cnt in enumerate(self.contours):
+			# if contour is too big or small, throw it out
+			if cv.contourArea(cnt) < self.minsize or cv.contourArea(cnt) > self.maxsize:
+				self.contours[i] = None
+				continue
+
+			# grab information for drawing the contour's bounding rectangle
+			x, y, w, h = cv.boundingRect(cnt)
+			 
+			# draw the rectangle from boundingRect
+			rect = cv.rectangle(im_rect, (x, y), (x + w, y + h), (0, 255, 0), 2)
+
+		cv.imshow('image', im_rect)
+		cv.setMouseCallback('image',self.copy_text)
+
+
+	# calculates contours and stores for later use
+	def calculate_contours(self):
+		# convert to grayscale and threshhold the image to make black and white
+		imgray = cv.cvtColor(self.image, cv.COLOR_BGR2GRAY)
+		ret, thresh = cv.threshold(imgray, 127, 255, cv.THRESH_BINARY_INV)
+		# apply gaussian blur to mitigate small and inaccurate contours being made
+		blurred = cv.GaussianBlur(thresh,(7,7),cv.BORDER_DEFAULT)
+		# the parameters just describe how the data should look, for more info look them up here
+		# https://docs.opencv.org/3.4/d3/dc0/group__imgproc__shape.html
+		self.contours, hierarchy = cv.findContours(blurred, cv.RETR_LIST, cv.CHAIN_APPROX_NONE)
+
+		self.contours = list(self.contours)
+
+
+	def read_image(self, image_path):
+		self.image = cv.imread(image_path)
+		assert self.image is not None, f"{image_path} could not be read as image"
+
+
+	# event that triggers on mouse input
+	def copy_text(self, event, x, y, flags, param):
+		if event != 1: # if not mouse clicked
+			return
+
+		for cnt in self.contours:
+			_x, _y, _w, _h = cv.boundingRect(cnt)
+			if (x > _x and x < _x+_w) and (y > _y and y < _y+_h): # if mouseclick is within bounding box
+				cropped = self.image[_y:_y + _h, _x:_x + _w] # grab the cropped image
+
+				# Apply OCR on the cropped image
+				# cv.imshow('clicked', cropped)
+				text = pytesseract.image_to_string(cropped).strip()
+				
+
+				pyperclip.copy(text)
+				print(f'[copy] : {text}')
+
+def main():
+	e = Extractor()
+
+	parser = argparse.ArgumentParser(description='Identifies text and allows copying.',
+		formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+	parser.add_argument('input', type=str,
+	                    help='the path of the image')
+	parser.add_argument('--min', type=int, default=150,
+						help='minimum size for contours in image')
+	parser.add_argument('--max', type=int, default=50000,
+						help='maximum size for contours in image')
+
+	args = parser.parse_args()
+
+	e.set_bounds(args.min, args.max)
+	e.read_image(args.input)
+	e.draw_contours()
+	cv.waitKey(0)
+	
+
+
+
+if __name__ == '__main__':
+	main()
